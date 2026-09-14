@@ -4,9 +4,13 @@ A recipe search app built with Vue 3's Composition API and Vite, backed by the
 free [TheMealDB](https://www.themealdb.com/api.php) API. Search by name, filter
 by category, and open a full recipe with ingredients, instructions, and video.
 
-Live at **https://greentea524.github.io/vue-recipe-finder/**
+Live in two places, both deployed from `main` (see [Deployment](#deployment)):
 
-Tracked as [KAN-65](https://gtea524.atlassian.net/browse/KAN-65).
+- GitHub Pages: **https://greentea524.github.io/vue-recipe-finder/**
+- Azure Static Web Apps: **https://zealous-rock-08fc77d10.6.azurestaticapps.net/**
+
+Built under [KAN-65](https://gtea524.atlassian.net/browse/KAN-65); Azure
+hosting added under [KAN-181](https://gtea524.atlassian.net/browse/KAN-181).
 
 ## Stack
 
@@ -19,7 +23,7 @@ Tracked as [KAN-65](https://gtea524.atlassian.net/browse/KAN-65).
 | State     | `ref` / `shallowRef` — no store layer |
 | Styling   | Vanilla CSS, dark glassmorphic theme  |
 | Tests     | Vitest                                |
-| Hosting   | GitHub Pages                          |
+| Hosting   | GitHub Pages + Azure Static Web Apps  |
 
 There is no backend. TheMealDB's v1 endpoint needs no key, so the browser calls
 it directly and nothing secret is involved.
@@ -32,6 +36,17 @@ npm run dev     # http://localhost:5173/vue-recipe-finder/
 npm test
 npm run build   # writes dist/, including the SPA fallback
 ```
+
+To build and preview the app the way Azure serves it, from the domain root:
+
+```bash
+VITE_BASE=/ npm run build
+npx vite preview --base /   # http://localhost:4173/
+```
+
+In Git Bash on Windows, prefix both with `MSYS_NO_PATHCONV=1`. Otherwise the
+shell rewrites `/` into a Windows path such as `/Program Files/Git/`, and the
+build silently uses that as its base.
 
 ## How it works
 
@@ -56,50 +71,84 @@ keeps a deliberately cancelled request from surfacing as an error.
 
 ## Deployment
 
-`.github/workflows/build-and-deploy.yml` runs on every push to `main`: install,
-test, build, verify the SPA fallback, then publish `dist/` via
-`actions/deploy-pages`, authenticating with the built-in `GITHUB_TOKEN`. Pages
-must be enabled once under Settings → Pages → Source: GitHub Actions.
+Every push to `main` deploys the same commit to two hosts. Two workflows run in
+parallel and don't depend on each other: if one fails, the other still
+deploys. Each runs its own install and tests, so tests run twice per push.
 
-Three things make this work on a project sub-path:
+|                  | GitHub Pages                              | Azure Static Web Apps                                   |
+| ---------------- | ----------------------------------------- | ------------------------------------------------------- |
+| URL              | `greentea524.github.io/vue-recipe-finder/` | `zealous-rock-08fc77d10.6.azurestaticapps.net/`         |
+| Workflow         | `.github/workflows/build-and-deploy.yml`  | `.github/workflows/azure-static-web-apps.yml`           |
+| Served from      | Sub-path `/vue-recipe-finder/`            | Domain root `/`                                         |
+| Build            | `npm run build` (default base)            | `npm run build` with `VITE_BASE=/`                      |
+| Deep-link rescue | `404.html`, a copy of `index.html`        | Rewrite rule in `public/staticwebapp.config.json`       |
+| Auth             | Built-in `GITHUB_TOKEN`                   | Repo secret `AZURE_STATIC_WEB_APPS_API_TOKEN`           |
+| Cost             | Free                                      | Free plan                                               |
+
+Both builds contain both deep-link mechanisms; each host ignores the one meant
+for the other.
+
+### What makes the base path work
+
+The app has to run both under `/vue-recipe-finder/` and at `/`, so nothing may
+hardcode either path:
 
 - **`base` in `vite.config.ts`** — otherwise every asset URL resolves against
-  the domain root and 404s, leaving an unstyled page. It defaults to
-  `/vue-recipe-finder/` and can be overridden with `VITE_BASE`.
+  the wrong prefix and 404s, leaving an unstyled page. It defaults to
+  `/vue-recipe-finder/` and is overridden with `VITE_BASE`.
 - **`createWebHistory(import.meta.env.BASE_URL)` in `src/router/index.ts`** —
-  otherwise assets load but in-app navigation builds URLs against the root, a
-  half-broken state that is easy to misdiagnose. Reading Vite's base keeps the
-  two in agreement.
-- **`scripts/spa-fallback.mjs`** — copies the built `index.html` to `404.html`.
-  GitHub Pages has no rewrite rules, so a cold request for
-  `/vue-recipe-finder/recipe/52772` would otherwise return a 404 page. Pages
-  serves `404.html` for unmatched paths while preserving the URL, so the app
-  boots and the router resolves the route on the client. The workflow asserts
-  the file exists rather than trusting the step silently ran.
+  otherwise assets load but in-app navigation builds URLs against the wrong
+  prefix, a half-broken state that is easy to misdiagnose. Reading Vite's base
+  means the router can't drift from it.
+
+Anything new that builds a URL should also go through `import.meta.env.BASE_URL`.
+
+### Deep links
+
+A cold request for a client-side route like `/recipe/52772` has no matching
+file, so each host needs a way to serve the app instead of a 404:
+
+- **Pages** has no rewrite rules. `scripts/spa-fallback.mjs` copies the built
+  `index.html` to `404.html`; Pages serves it for unmatched paths while keeping
+  the URL, so the app boots and the router resolves the route on the client.
+  The Pages workflow asserts the file exists rather than trusting the step ran.
+- **Azure** supports rewrites. `staticwebapp.config.json`'s `navigationFallback`
+  rewrites unmatched navigation requests to `/index.html`, excluding
+  `/assets/*` so a missing bundle still returns a real 404.
 
 Unknown routes still reach the app's own not-found view, so a genuinely bad
 path looks intentional rather than broken.
 
-### Azure Static Web Apps
+### GitHub Pages setup
 
-`.github/workflows/azure-static-web-apps.yml` also deploys every push to `main`
-to Azure Static Web Apps, independently of Pages. It builds with `VITE_BASE=/`
-because Azure serves from the domain root, then uploads `dist/`.
+Enabled once under Settings → Pages → Source: GitHub Actions. The workflow
+publishes `dist/` via `actions/deploy-pages` and retries once on a transient
+Pages failure.
 
-Azure has rewrite rules, so it doesn't rely on `404.html`:
-`public/staticwebapp.config.json` rewrites unmatched navigation requests to
-`/index.html`. That file is also copied to the Pages build, where it does
-nothing.
+### Azure setup
 
-One-time setup:
+The Static Web App was created in the Azure Portal on the **Free** plan with
+**Deployment source: Other**, not GitHub. Choosing GitHub makes Azure commit a
+second, generated workflow with its own build, which would ignore `VITE_BASE`
+and skip the tests. Instead, the workflow here builds and tests itself and uses
+`Azure/static-web-apps-deploy@v1` only to upload `dist/` (`skip_app_build`).
 
-1. In the Azure Portal, create a Static Web App on the Free plan with
-   **Deployment source: Other**. Choosing GitHub instead makes Azure commit a
-   second, generated workflow.
-2. Copy the resource's deployment token (Overview → Manage deployment token).
-3. Add it as the repository secret `AZURE_STATIC_WEB_APPS_API_TOKEN`.
+It authenticates with the resource's deployment token, stored as the repo
+secret `AZURE_STATIC_WEB_APPS_API_TOKEN`. If the secret is missing, the workflow
+skips the deploy with a notice instead of failing.
 
-Until that secret exists, the workflow skips the deploy instead of failing.
+- **Rotating the token:** in Azure, open the Static Web App → Overview → Manage
+  deployment token → Reset, then paste the new value into the GitHub secret.
+- **Rebuilding the resource:** repeat the setup above. A new resource gets a
+  new `*.azurestaticapps.net` hostname, so update the URL in this README.
+
+### Dropping a host
+
+- **Azure only:** delete `build-and-deploy.yml` and disable Pages. You can then
+  default `base` to `/` and remove `scripts/spa-fallback.mjs`.
+- **Pages only:** delete `azure-static-web-apps.yml`,
+  `public/staticwebapp.config.json` and the secret, then delete the Static Web
+  App in Azure.
 
 ## Configuration
 
