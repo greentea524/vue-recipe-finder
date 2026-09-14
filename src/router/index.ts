@@ -1,12 +1,11 @@
 import { createRouter, createWebHistory } from "vue-router";
 import HomeView from "../views/HomeView.vue";
 
-// Must match `base` in vite.config.ts. Without it the router builds in-app
-// URLs against the domain root while the app is served from a sub-path.
-const BASE = "/vue-recipe-finder/";
-
+// Vite's `base` (vite.config.ts), so the two cannot drift. Without it the
+// router builds in-app URLs against the domain root while the app is served
+// from a sub-path.
 export const router = createRouter({
-  history: createWebHistory(BASE),
+  history: createWebHistory(import.meta.env.BASE_URL),
   routes: [
     { path: "/", name: "home", component: HomeView },
     {
